@@ -8,6 +8,7 @@ from dataclasses import dataclass
 import ctypes
 from ctypes import wintypes
 import http.client
+import ipaddress
 import json
 import os
 from pathlib import Path
@@ -29,7 +30,6 @@ ERROR_INSUFFICIENT_BUFFER = 122
 TCP_TABLE_OWNER_PID_LISTENER = 3
 MIB_TCP_STATE_LISTEN = 2
 PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
-GW_OWNER = 4
 WM_CLOSE = 0x0010
 PROCESS_NAME_CAPACITY = 32768
 MCP_HEALTH_TIMEOUT = 15
@@ -84,6 +84,13 @@ def parse_mcp_url(value: str) -> McpEndpoint:
         raise SwitchError("--mcp-url must include a host")
     if ":" in parts.hostname:
         raise SwitchError("IPv6 MCP endpoints are unsupported")
+    host = parts.hostname.casefold()
+    if host != "localhost":
+        try:
+            if not ipaddress.ip_address(host).is_loopback:
+                raise SwitchError("--mcp-url host must be a loopback address")
+        except ValueError as exc:
+            raise SwitchError("--mcp-url host must be a loopback address") from exc
     try:
         parsed_port = parts.port
     except ValueError as exc:
@@ -96,7 +103,7 @@ def parse_mcp_url(value: str) -> McpEndpoint:
         path = f"/{path}"
     if parts.query:
         path = f"{path}?{parts.query}"
-    return McpEndpoint(parts.hostname, port, path)
+    return McpEndpoint(host, port, path)
 
 
 class McpClient:
@@ -290,18 +297,12 @@ class WindowCandidate:
     title: str
     class_name: str
     visible: bool
-    owner: int
 
 
 @dataclass(frozen=True)
 class AutomationDesktops:
     uia: object
     win32: object
-
-
-def normalize_window_handle(handle) -> int:
-    value = getattr(handle, "value", handle)
-    return 0 if value is None else int(value)
 
 
 def window_is_live_and_visible(handle: int) -> bool:
@@ -316,7 +317,6 @@ def window_is_live_and_visible(handle: int) -> bool:
 def is_ida_main_window(candidate: WindowCandidate) -> bool:
     return (
         candidate.visible
-        and candidate.owner == 0
         and candidate.title.casefold().startswith("ida - ")
         and IDA_WINDOW_CLASS.fullmatch(candidate.class_name) is not None
     )
@@ -335,52 +335,28 @@ def select_main_window(candidates: list[WindowCandidate]) -> int:
     return matches[0].handle
 
 
-def main_window(pid: int) -> int:
-    user = ctypes.WinDLL("user32", use_last_error=True)
-    callback_type = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
-    user.EnumWindows.argtypes = [callback_type, wintypes.LPARAM]
-    user.EnumWindows.restype = wintypes.BOOL
-    user.GetWindowThreadProcessId.argtypes = [
-        wintypes.HWND,
-        ctypes.POINTER(wintypes.DWORD),
-    ]
-    user.GetWindowThreadProcessId.restype = wintypes.DWORD
-    user.GetWindow.argtypes = [wintypes.HWND, wintypes.UINT]
-    user.GetWindow.restype = wintypes.HWND
-    user.GetWindowTextLengthW.argtypes = [wintypes.HWND]
-    user.GetWindowTextLengthW.restype = ctypes.c_int
-    user.GetWindowTextW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
-    user.GetWindowTextW.restype = ctypes.c_int
-    user.GetClassNameW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
-    user.GetClassNameW.restype = ctypes.c_int
-    user.IsWindowVisible.argtypes = [wintypes.HWND]
-    user.IsWindowVisible.restype = wintypes.BOOL
-    candidates: list[WindowCandidate] = []
-
-    @callback_type
-    def collect(hwnd, unused):
-        process_id = wintypes.DWORD()
-        user.GetWindowThreadProcessId(hwnd, ctypes.byref(process_id))
-        if process_id.value == pid:
-            length = user.GetWindowTextLengthW(hwnd)
-            title = ctypes.create_unicode_buffer(length + 1)
-            user.GetWindowTextW(hwnd, title, len(title))
-            class_name = ctypes.create_unicode_buffer(256)
-            user.GetClassNameW(hwnd, class_name, len(class_name))
-            candidates.append(
-                WindowCandidate(
-                    handle=int(hwnd),
-                    title=title.value,
-                    class_name=class_name.value,
-                    visible=bool(user.IsWindowVisible(hwnd)),
-                    owner=normalize_window_handle(user.GetWindow(hwnd, GW_OWNER)),
-                )
+def window_candidates(
+    automation: AutomationDesktops,
+    pid: int,
+) -> list[WindowCandidate]:
+    try:
+        windows = automation.win32.windows(process=pid, visible_only=True)
+        return [
+            WindowCandidate(
+                handle=int(window.handle),
+                title=window.window_text(),
+                class_name=window.class_name(),
+                visible=bool(window.is_visible()),
             )
-        return True
+            for window in windows
+            if window.handle
+        ]
+    except Exception as exc:
+        raise SwitchError(f"Cannot enumerate IDA windows for PID {pid}: {exc}") from exc
 
-    if not user.EnumWindows(collect, 0):
-        raise SwitchError(f"Cannot enumerate windows for PID {pid}")
-    return select_main_window(candidates)
+
+def main_window(automation: AutomationDesktops, pid: int) -> int:
+    return select_main_window(window_candidates(automation, pid))
 
 
 def request_close(hwnd: int) -> None:
@@ -409,10 +385,6 @@ def comtypes_cache_roots() -> tuple[Path, ...]:
     if not any(same_path(temporary, root) for root in roots):
         roots.append(temporary)
     return tuple(roots)
-
-
-def comtypes_cache_root() -> Path:
-    return comtypes_cache_roots()[0]
 
 
 @contextmanager
@@ -526,13 +498,9 @@ def automate_save_dialog(
     hwnd: int,
     handled: set[int],
 ) -> None:
-    try:
-        dialogs = automation.win32.windows(process=pid, visible_only=True)
-    except Exception as exc:
-        raise SwitchError(f"Cannot enumerate IDA dialogs safely: {exc}") from exc
-    for window in dialogs:
-        handle = normalize_window_handle(getattr(window, "handle", None))
-        if not handle or handle == hwnd or handle in handled:
+    for candidate in window_candidates(automation, pid):
+        handle = candidate.handle
+        if handle == hwnd or handle in handled:
             continue
         if not window_is_live_and_visible(handle):
             continue
@@ -668,8 +636,8 @@ class SystemRuntime:
         except Exception as exc:
             raise SwitchError(f"IDA desktop automation unavailable: {exc}") from exc
 
-    def main_window(self, pid: int) -> int:
-        return main_window(pid)
+    def main_window(self, automation: AutomationDesktops, pid: int) -> int:
+        return main_window(automation, pid)
 
     def request_close(self, hwnd: int) -> None:
         request_close(hwnd)
@@ -739,7 +707,7 @@ class IdaSequencer:
         ):
             raise SwitchError("Next sample resolves to the current IDB")
         automation = self.runtime.prepare_desktop(current.pid)
-        hwnd = self.runtime.main_window(current.pid)
+        hwnd = self.runtime.main_window(automation, current.pid)
         print(f"Saving current IDA database: {current.idb_path}", flush=True)
         saved = self.client.tool(
             "idb_save", timeout=min(self.timeout, MCP_SAVE_TIMEOUT_CAP)
@@ -807,37 +775,43 @@ class IdaSequencer:
         deadline = self.runtime.monotonic() + self.timeout
         handled: set[int] = set()
         while self.runtime.monotonic() < deadline:
-            if self.runtime.process_exe(current.pid) is None:
-                owner = self.runtime.listener_pid(self.endpoint)
-                if owner is not None:
-                    raise SwitchError(
-                        f"IDA exited but MCP port is still owned by PID {owner}"
-                    )
-                if not current.idb_path.is_file() or current.idb_path.stat().st_size == 0:
-                    raise SwitchError(
-                        f"IDA exited but IDB is missing or empty: {current.idb_path}"
-                    )
+            complete, error = self._shutdown_state(current)
+            if complete:
                 return
+            if error is not None:
+                raise SwitchError(error)
             try:
                 automate_save_dialog(automation, current.pid, hwnd, handled)
-            except SwitchError:
-                if self._shutdown_complete(current):
+            except SwitchError as exc:
+                complete, error = self._shutdown_state(current)
+                if complete:
                     return
+                if error is not None:
+                    raise SwitchError(error) from exc
                 raise
             self.runtime.sleep(CLOSE_POLL_SECONDS)
         raise SwitchError(
             "IDA did not exit normally; leaving the process running (no force-kill)"
         )
 
-    def _shutdown_complete(self, current: IdaSession) -> bool:
+    def _shutdown_state(self, current: IdaSession) -> tuple[bool, str | None]:
         if self.runtime.process_exe(current.pid) is not None:
-            return False
+            return False, None
         try:
-            if self.runtime.listener_pid(self.endpoint) is not None:
-                return False
-            return current.idb_path.is_file() and current.idb_path.stat().st_size > 0
-        except (OSError, SwitchError):
-            return False
+            owner = self.runtime.listener_pid(self.endpoint)
+        except SwitchError as exc:
+            return False, f"Cannot verify MCP port release: {exc}"
+        if owner is not None:
+            return False, f"IDA exited but MCP port is still owned by PID {owner}"
+        try:
+            database_ready = (
+                current.idb_path.is_file() and current.idb_path.stat().st_size > 0
+            )
+        except OSError as exc:
+            return False, f"Cannot verify saved IDB {current.idb_path}: {exc}"
+        if not database_ready:
+            return False, f"IDA exited but IDB is missing or empty: {current.idb_path}"
+        return True, None
 
 
 def verify_save(saved: dict, expected: str | Path) -> None:

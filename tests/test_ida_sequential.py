@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from contextlib import redirect_stderr
-import ctypes
 import importlib.util
 from io import StringIO
 import os
@@ -62,7 +61,7 @@ class FakeRuntime:
         self.events.append("prepare")
         return FakeDesktop()
 
-    def main_window(self, pid: int):
+    def main_window(self, automation, pid: int):
         return 101
 
     def request_close(self, hwnd: int):
@@ -108,6 +107,10 @@ class McpUrlTests(unittest.TestCase):
         for value in invalid:
             with self.subTest(value=value), self.assertRaises(target.SwitchError):
                 target.parse_mcp_url(value)
+
+    def test_rejects_non_loopback_host(self):
+        with self.assertRaisesRegex(target.SwitchError, "loopback"):
+            target.parse_mcp_url("http://192.0.2.10:13337/mcp")
 
 
 class ComtypesCacheTests(unittest.TestCase):
@@ -177,54 +180,65 @@ class ComtypesCacheTests(unittest.TestCase):
 
 
 class WindowSelectionTests(unittest.TestCase):
-    def test_normalizes_none_owner_handle(self):
-        self.assertEqual(target.normalize_window_handle(None), 0)
-
-    def test_normalizes_null_ctypes_owner_handle(self):
-        self.assertEqual(target.normalize_window_handle(ctypes.c_void_p(0)), 0)
-
-    def test_normalizes_nonzero_ctypes_owner_handle(self):
-        self.assertEqual(target.normalize_window_handle(ctypes.c_void_p(42)), 42)
-
-    def test_ignores_hidden_shadow_window(self):
-        shadow = target.WindowCandidate(
+    def test_rejects_when_no_main_window(self):
+        tool = target.WindowCandidate(
             handle=1,
-            title="IDA - hidden shadow",
-            class_name="PopupDropShadowSaveBits",
-            visible=False,
-            owner=0,
+            title="IDA tool",
+            class_name="Qt5153QTQWindowIcon",
+            visible=True,
         )
 
         with self.assertRaisesRegex(target.SwitchError, "found 0"):
-            target.select_main_window([shadow])
+            target.select_main_window([tool])
 
-    def test_ignores_hidden_quick_start_window(self):
+    def test_ignores_hidden_quick_start_and_shadow_windows(self):
         quick_start = target.WindowCandidate(
             handle=2,
             title="IDA: Quick start",
             class_name="Qt5153QTQWindowIcon",
             visible=False,
-            owner=0,
+        )
+        shadow = target.WindowCandidate(
+            handle=1,
+            title="IDA - hidden shadow",
+            class_name="PopupDropShadowSaveBits",
+            visible=False,
+        )
+        main = target.WindowCandidate(
+            handle=3,
+            title="IDA - main",
+            class_name="Qt5153QTQWindowIcon",
+            visible=True,
         )
 
-        with self.assertRaisesRegex(target.SwitchError, "found 0"):
-            target.select_main_window([quick_start])
+        self.assertEqual(target.select_main_window([quick_start, shadow, main]), 3)
 
     def test_selects_single_visible_main_window(self):
-        candidates = [
-            target.WindowCandidate(1, "IDA - shadow", "PopupDropShadowSaveBits", False, 0),
-            target.WindowCandidate(2, "IDA: Quick start", "Qt5153QTQWindowIcon", False, 0),
-            target.WindowCandidate(3, "Please wait...", "Qt5153QTQWindowIcon", False, 0),
-            target.WindowCandidate(4, "IDA - owned", "Qt5153QTQWindowIcon", True, 7),
-            target.WindowCandidate(5, "IDA - main", "Qt5153QTQWindowIcon", True, 0),
-        ]
+        windows = []
+        for handle, title, class_name, visible in (
+            (1, "IDA - shadow", "PopupDropShadowSaveBits", False),
+            (2, "IDA: Quick start", "Qt5153QTQWindowIcon", False),
+            (3, "Please wait...", "Qt5153QTQWindowIcon", False),
+            (5, "IDA - main", "Qt5153QTQWindowIcon", True),
+        ):
+            window = Mock()
+            window.handle = handle
+            window.window_text.return_value = title
+            window.class_name.return_value = class_name
+            window.is_visible.return_value = visible
+            windows.append(window)
+        automation = Mock()
+        automation.win32.windows.return_value = windows
 
-        self.assertEqual(target.select_main_window(candidates), 5)
+        self.assertEqual(target.main_window(automation, 1660), 5)
+        automation.win32.windows.assert_called_once_with(
+            process=1660, visible_only=True
+        )
 
     def test_rejects_multiple_visible_main_windows(self):
         candidates = [
-            target.WindowCandidate(5, "IDA - first", "Qt5153QTQWindowIcon", True, 0),
-            target.WindowCandidate(6, "IDA - second", "Qt5153QTQWindowIcon", True, 0),
+            target.WindowCandidate(5, "IDA - first", "Qt5153QTQWindowIcon", True),
+            target.WindowCandidate(6, "IDA - second", "Qt5153QTQWindowIcon", True),
         ]
 
         with self.assertRaisesRegex(target.SwitchError, "found 2"):
@@ -251,6 +265,8 @@ class DialogAutomationTests(unittest.TestCase):
         dialog = Mock()
         dialog.handle = 6881966
         dialog.window_text.return_value = "Save database"
+        dialog.class_name.return_value = "Qt5153QTQWindowIcon"
+        dialog.is_visible.return_value = True
         dialog.descendants.return_value = [deflate, discard, confirm]
 
         uia = Mock()
@@ -303,6 +319,9 @@ class DialogAutomationTests(unittest.TestCase):
     def test_destroyed_window_is_skipped_before_uia_binding(self):
         dialog = Mock()
         dialog.handle = 6881966
+        dialog.window_text.return_value = "Save database"
+        dialog.class_name.return_value = "Qt5153QTQWindowIcon"
+        dialog.is_visible.return_value = True
         uia = Mock()
         win32 = Mock()
         win32.windows.return_value = [dialog]

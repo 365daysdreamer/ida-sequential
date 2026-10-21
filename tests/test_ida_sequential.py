@@ -216,6 +216,66 @@ class ProcessIdentityTests(unittest.TestCase):
         close_handle.assert_called_once_with(handle)
 
 
+class ListenerQueryTests(unittest.TestCase):
+    def setUp(self):
+        self.endpoint = target.parse_mcp_url("http://127.0.0.1:13337/mcp")
+
+    def query(self, output: bytes, returncode: int = 0, stderr: bytes = b""):
+        result = Mock(returncode=returncode, stdout=output, stderr=stderr)
+        with patch.object(target.subprocess, "run", return_value=result):
+            return target.listener_pids(self.endpoint)
+
+    def test_single_listener_including_ipv6_duplicate(self):
+        output = b"\n".join(
+            (
+                b"  Proto  Local Address          Foreign Address        State           PID",
+                b"  TCP    127.0.0.1:13337        0.0.0.0:0              LISTENING       8084",
+                b"  TCP    [::]:13337             [::]:0                 LISTENING       8084",
+            )
+        )
+        self.assertEqual(self.query(output), {8084})
+        with patch.object(target.subprocess, "run", return_value=Mock(returncode=0, stdout=output, stderr=b"")):
+            self.assertEqual(target.listener_pid(self.endpoint), 8084)
+
+    def test_same_port_multiple_pids_is_ambiguous(self):
+        output = b"\n".join(
+            (
+                b"  TCP    127.0.0.1:13337        0.0.0.0:0              LISTENING       10",
+                b"  TCP    [::]:13337             [::]:0                 LISTENING       20",
+            )
+        )
+        result = Mock(returncode=0, stdout=output, stderr=b"")
+        with patch.object(target.subprocess, "run", return_value=result):
+            with self.assertRaisesRegex(target.SwitchError, "Ambiguous"):
+                target.listener_pid(self.endpoint)
+
+    def test_established_connection_is_ignored(self):
+        output = b"\n".join(
+            (
+                b"  TCP    127.0.0.1:13337        127.0.0.1:50000         ESTABLISHED     8084",
+                b"  TCP    127.0.0.1:14000        0.0.0.0:0              LISTENING       42",
+            )
+        )
+        self.assertEqual(self.query(output), set())
+
+    def test_netstat_nonzero_exit_is_visible(self):
+        result = Mock(returncode=1, stdout=b"", stderr=b"access denied")
+        with patch.object(target.subprocess, "run", return_value=result):
+            with self.assertRaisesRegex(target.SwitchError, "exit code 1.*access denied"):
+                target.listener_pids(self.endpoint)
+
+    def test_malformed_columns_and_ports_are_rejected(self):
+        malformed = (
+            b"  TCP    127.0.0.1:13337        0.0.0.0:0              LISTENING",
+            b"  TCP    127.0.0.1:not-a-port   0.0.0.0:0              LISTENING       10",
+            b"  TCP    127.0.0.1:70000        0.0.0.0:0              LISTENING       10",
+        )
+        for output in malformed:
+            with self.subTest(output=output):
+                with self.assertRaises(target.SwitchError):
+                    self.query(output)
+
+
 class WindowSelectionTests(unittest.TestCase):
     def test_rejects_when_no_main_window(self):
         tool = target.WindowCandidate(

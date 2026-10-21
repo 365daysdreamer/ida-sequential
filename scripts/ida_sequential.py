@@ -13,7 +13,6 @@ import json
 import os
 from pathlib import Path
 import re
-import socket
 import subprocess
 import sys
 import tempfile
@@ -30,9 +29,6 @@ import win32process
 DEFAULT_MCP_URL = "http://127.0.0.1:13337/mcp"
 IDA_EXECUTABLES = frozenset({"ida64.exe", "ida.exe", "idaq64.exe", "idaq.exe"})
 DATABASE_SUFFIXES = frozenset({".i64", ".idb"})
-ERROR_INSUFFICIENT_BUFFER = 122
-TCP_TABLE_OWNER_PID_LISTENER = 3
-MIB_TCP_STATE_LISTEN = 2
 WM_CLOSE = 0x0010
 MCP_HEALTH_TIMEOUT = 15
 MCP_SAVE_TIMEOUT_CAP = 120
@@ -167,66 +163,38 @@ class McpClient:
         return self.tool("server_health", timeout=MCP_HEALTH_TIMEOUT)
 
 
-class TcpRow(ctypes.Structure):
-    _fields_ = [
-        (field, ctypes.c_uint32)
-        for field in (
-            "state",
-            "local_addr",
-            "local_port",
-            "remote_addr",
-            "remote_port",
-            "pid",
-        )
-    ]
-
-
 def listener_pids(endpoint: McpEndpoint) -> set[int]:
-    api = ctypes.WinDLL("iphlpapi", use_last_error=True)
-    query = api.GetExtendedTcpTable
-    query.argtypes = [
-        ctypes.c_void_p,
-        ctypes.POINTER(ctypes.c_uint32),
-        wintypes.BOOL,
-        ctypes.c_uint32,
-        ctypes.c_uint32,
-        ctypes.c_uint32,
-    ]
-    query.restype = ctypes.c_uint32
-    size = ctypes.c_uint32(0)
-    status = query(
-        None,
-        ctypes.byref(size),
-        False,
-        socket.AF_INET,
-        TCP_TABLE_OWNER_PID_LISTENER,
-        0,
-    )
-    if status != ERROR_INSUFFICIENT_BUFFER:
-        raise SwitchError(f"GetExtendedTcpTable size query failed: {status}")
-    buffer = ctypes.create_string_buffer(size.value)
-    status = query(
-        buffer,
-        ctypes.byref(size),
-        False,
-        socket.AF_INET,
-        TCP_TABLE_OWNER_PID_LISTENER,
-        0,
-    )
-    if status:
-        raise SwitchError(f"GetExtendedTcpTable failed: {status}")
-    count = ctypes.c_uint32.from_buffer(buffer).value
-    if 4 + count * ctypes.sizeof(TcpRow) > size.value:
-        raise SwitchError("TCP listener table returned an invalid size")
-    base = ctypes.addressof(buffer) + ctypes.sizeof(ctypes.c_uint32)
+    try:
+        result = subprocess.run(
+            ["netstat", "-ano", "-p", "TCP"],
+            capture_output=True,
+            check=False,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    except OSError as exc:
+        raise SwitchError(f"Cannot run netstat: {exc}") from exc
+    if result.returncode:
+        stderr = result.stderr.decode("utf-8", errors="replace").strip()
+        raise SwitchError(f"netstat failed with exit code {result.returncode}: {stderr}")
     owners: set[int] = set()
-    for index in range(count):
-        row = TcpRow.from_address(base + index * ctypes.sizeof(TcpRow))
-        address = socket.inet_ntoa(row.local_addr.to_bytes(4, "little"))
-        port = socket.ntohs(row.local_port & 0xFFFF)
-        local_listener = address.startswith("127.") or address == "0.0.0.0"
-        if row.state == MIB_TCP_STATE_LISTEN and port == endpoint.port and local_listener:
-            owners.add(row.pid)
+    for line in result.stdout.splitlines():
+        columns = line.split()
+        if not columns or columns[0].upper() != b"TCP":
+            continue
+        if len(columns) != 5:
+            raise SwitchError(f"Malformed netstat TCP row: {line!r}")
+        local, remote, _, pid = columns[1:5]
+        if remote not in (b"0.0.0.0:0", b"[::]:0"):
+            continue
+        try:
+            port = int(local.rsplit(b":", 1)[1])
+            process_id = int(pid)
+        except (IndexError, ValueError) as exc:
+            raise SwitchError(f"Invalid netstat port or PID: {line!r}") from exc
+        if not 1 <= port <= 65535 or process_id <= 0:
+            raise SwitchError(f"Invalid netstat port or PID: {line!r}")
+        if port == endpoint.port:
+            owners.add(process_id)
     return owners
 
 

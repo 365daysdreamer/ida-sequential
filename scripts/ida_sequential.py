@@ -5,8 +5,6 @@ from __future__ import annotations
 import argparse
 from contextlib import contextmanager
 from dataclasses import dataclass
-import ctypes
-from ctypes import wintypes
 import http.client
 import ipaddress
 import json
@@ -23,13 +21,13 @@ from urllib.parse import urlsplit
 import pywintypes
 import win32api
 import win32con
+import win32gui
 import win32process
 
 
 DEFAULT_MCP_URL = "http://127.0.0.1:13337/mcp"
 IDA_EXECUTABLES = frozenset({"ida64.exe", "ida.exe", "idaq64.exe", "idaq.exe"})
 DATABASE_SUFFIXES = frozenset({".i64", ".idb"})
-WM_CLOSE = 0x0010
 MCP_HEALTH_TIMEOUT = 15
 MCP_SAVE_TIMEOUT_CAP = 120
 HEALTH_POLL_SECONDS = 1.0
@@ -250,12 +248,7 @@ class AutomationDesktops:
 
 
 def window_is_live_and_visible(handle: int) -> bool:
-    user = ctypes.WinDLL("user32", use_last_error=True)
-    user.IsWindow.argtypes = [wintypes.HWND]
-    user.IsWindow.restype = wintypes.BOOL
-    user.IsWindowVisible.argtypes = [wintypes.HWND]
-    user.IsWindowVisible.restype = wintypes.BOOL
-    return bool(user.IsWindow(handle) and user.IsWindowVisible(handle))
+    return bool(win32gui.IsWindow(handle) and win32gui.IsWindowVisible(handle))
 
 
 def is_ida_main_window(candidate: WindowCandidate) -> bool:
@@ -304,16 +297,10 @@ def main_window(automation: AutomationDesktops, pid: int) -> int:
 
 
 def request_close(hwnd: int) -> None:
-    user = ctypes.WinDLL("user32", use_last_error=True)
-    user.PostMessageW.argtypes = [
-        wintypes.HWND,
-        wintypes.UINT,
-        wintypes.WPARAM,
-        wintypes.LPARAM,
-    ]
-    user.PostMessageW.restype = wintypes.BOOL
-    if not user.PostMessageW(hwnd, WM_CLOSE, 0, 0):
-        raise SwitchError("Failed to request normal IDA window close")
+    try:
+        win32gui.PostMessage(hwnd, win32con.WM_CLOSE, 0, 0)
+    except pywintypes.error as exc:
+        raise SwitchError(f"Failed to request normal IDA window close: {exc}") from exc
 
 
 def label(text: str) -> str:

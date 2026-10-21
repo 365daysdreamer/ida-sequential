@@ -216,6 +216,39 @@ class ProcessIdentityTests(unittest.TestCase):
         close_handle.assert_called_once_with(handle)
 
 
+class WindowOperationTests(unittest.TestCase):
+    def test_window_live_requires_existing_visible_window(self):
+        with (
+            patch.object(target.win32gui, "IsWindow", return_value=False),
+            patch.object(target.win32gui, "IsWindowVisible") as visible,
+        ):
+            self.assertFalse(target.window_is_live_and_visible(100))
+        visible.assert_not_called()
+
+        with (
+            patch.object(target.win32gui, "IsWindow", return_value=True),
+            patch.object(target.win32gui, "IsWindowVisible", return_value=False),
+        ):
+            self.assertFalse(target.window_is_live_and_visible(100))
+
+        with (
+            patch.object(target.win32gui, "IsWindow", return_value=True),
+            patch.object(target.win32gui, "IsWindowVisible", return_value=True),
+        ):
+            self.assertTrue(target.window_is_live_and_visible(100))
+
+    def test_request_close_posts_wm_close(self):
+        with patch.object(target.win32gui, "PostMessage") as post_message:
+            target.request_close(123)
+        post_message.assert_called_once_with(123, target.win32con.WM_CLOSE, 0, 0)
+
+    def test_request_close_wraps_pywin32_error(self):
+        error = target.pywintypes.error(5, "PostMessage", "Access denied")
+        with patch.object(target.win32gui, "PostMessage", side_effect=error):
+            with self.assertRaisesRegex(target.SwitchError, "window close"):
+                target.request_close(123)
+
+
 class ListenerQueryTests(unittest.TestCase):
     def setUp(self):
         self.endpoint = target.parse_mcp_url("http://127.0.0.1:13337/mcp")

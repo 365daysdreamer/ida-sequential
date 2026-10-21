@@ -179,6 +179,43 @@ class ComtypesCacheTests(unittest.TestCase):
                 self.assertEqual(Path.cwd(), previous)
 
 
+class ProcessIdentityTests(unittest.TestCase):
+    def test_process_exe_uses_pywin32_and_always_closes(self):
+        pid = 1660
+        error = target.pywintypes.error(5, "OpenProcess", "Access denied")
+        with patch.object(target.win32api, "OpenProcess", side_effect=error):
+            self.assertIsNone(target.process_exe(pid))
+
+        handle = object()
+        executable = Path("ida64.exe")
+        with (
+            patch.object(target.win32api, "OpenProcess", return_value=handle) as open_process,
+            patch.object(
+                target.win32process,
+                "GetModuleFileNameEx",
+                return_value=str(executable),
+            ),
+            patch.object(target.win32api, "CloseHandle") as close_handle,
+        ):
+            self.assertEqual(target.process_exe(pid), executable)
+        open_process.assert_called_once_with(
+            target.win32con.PROCESS_QUERY_LIMITED_INFORMATION, False, pid
+        )
+        close_handle.assert_called_once_with(handle)
+
+        with (
+            patch.object(target.win32api, "OpenProcess", return_value=handle),
+            patch.object(
+                target.win32process,
+                "GetModuleFileNameEx",
+                side_effect=error,
+            ),
+            patch.object(target.win32api, "CloseHandle") as close_handle,
+        ):
+            self.assertIsNone(target.process_exe(pid))
+        close_handle.assert_called_once_with(handle)
+
+
 class WindowSelectionTests(unittest.TestCase):
     def test_rejects_when_no_main_window(self):
         tool = target.WindowCandidate(

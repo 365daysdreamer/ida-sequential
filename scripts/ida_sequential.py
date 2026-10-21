@@ -21,17 +21,19 @@ import time
 import types
 from urllib.parse import urlsplit
 
+import pywintypes
+import win32api
+import win32con
+import win32process
+
 
 DEFAULT_MCP_URL = "http://127.0.0.1:13337/mcp"
 IDA_EXECUTABLES = frozenset({"ida64.exe", "ida.exe", "idaq64.exe", "idaq.exe"})
 DATABASE_SUFFIXES = frozenset({".i64", ".idb"})
-STILL_ACTIVE = 259
 ERROR_INSUFFICIENT_BUFFER = 122
 TCP_TABLE_OWNER_PID_LISTENER = 3
 MIB_TCP_STATE_LISTEN = 2
-PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 WM_CLOSE = 0x0010
-PROCESS_NAME_CAPACITY = 32768
 MCP_HEALTH_TIMEOUT = 15
 MCP_SAVE_TIMEOUT_CAP = 120
 HEALTH_POLL_SECONDS = 1.0
@@ -235,47 +237,21 @@ def listener_pid(endpoint: McpEndpoint) -> int | None:
     return next(iter(owners), None)
 
 
-def kernel32():
-    library = ctypes.WinDLL("kernel32", use_last_error=True)
-    library.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
-    library.OpenProcess.restype = wintypes.HANDLE
-    library.CloseHandle.argtypes = [wintypes.HANDLE]
-    library.CloseHandle.restype = wintypes.BOOL
-    library.GetExitCodeProcess.argtypes = [
-        wintypes.HANDLE,
-        ctypes.POINTER(wintypes.DWORD),
-    ]
-    library.GetExitCodeProcess.restype = wintypes.BOOL
-    library.QueryFullProcessImageNameW.argtypes = [
-        wintypes.HANDLE,
-        wintypes.DWORD,
-        wintypes.LPWSTR,
-        ctypes.POINTER(wintypes.DWORD),
-    ]
-    library.QueryFullProcessImageNameW.restype = wintypes.BOOL
-    return library
-
-
 def process_exe(pid: int) -> Path | None:
-    library = kernel32()
-    handle = library.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+    try:
+        handle = win32api.OpenProcess(
+            win32con.PROCESS_QUERY_LIMITED_INFORMATION, False, pid
+        )
+    except pywintypes.error:
+        return None
     if not handle:
         return None
     try:
-        exit_code = wintypes.DWORD()
-        if not library.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
-            raise SwitchError(f"Cannot query process {pid}")
-        if exit_code.value != STILL_ACTIVE:
-            return None
-        buffer = ctypes.create_unicode_buffer(PROCESS_NAME_CAPACITY)
-        size = wintypes.DWORD(len(buffer))
-        if not library.QueryFullProcessImageNameW(
-            handle, 0, buffer, ctypes.byref(size)
-        ):
-            raise SwitchError(f"Cannot query executable for PID {pid}")
-        return Path(buffer.value)
+        return Path(win32process.GetModuleFileNameEx(handle, 0))
+    except pywintypes.error:
+        return None
     finally:
-        library.CloseHandle(handle)
+        win32api.CloseHandle(handle)
 
 
 def is_ida_executable(path: str | Path) -> bool:

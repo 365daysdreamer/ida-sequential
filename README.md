@@ -13,13 +13,13 @@
 url = "<MCP_URL>"
 ```
 
-## 安装
+### 安装
 
 ```text
 npx skills add 365daysdreamer/ida-sequential -g
 ```
 
-## 确认 Python 解释器
+### 确认 Python 解释器
 
 脚本需要使用和 `ida-pro-mcp` 相同的 Python 解释器。IDA 内嵌环境中的 `sys.executable` 常指向 `ida.exe`，解释器应以 `sys.base_prefix` 推导：
 
@@ -49,7 +49,9 @@ Test-Path -LiteralPath $Python -PathType Leaf
 & $Python -m pip install pywinauto
 ```
 
-## 基本参数
+## 使用方法
+
+### 基本参数
 
 ```powershell
 Set-Location "<REPO_ROOT>"
@@ -60,7 +62,7 @@ $Timeout = 600
 
 `--ida` 指向 IDA GUI 可执行文件。`--timeout` 控制关闭与启动等待的上限，单位为秒。
 
-## 查看状态
+### 查看状态
 
 ```powershell
 & $Python ida_sequential.py status --mcp-url $McpUrl
@@ -73,7 +75,7 @@ $Timeout = 600
 - `idb_path` 指向当前数据库
 - `auto_analysis_ready` 为 `true`
 
-## 首次打开
+### 首次打开
 
 MCP 端口空闲且没有 IDA 实例时：
 
@@ -86,7 +88,7 @@ MCP 端口空闲且没有 IDA 实例时：
 
 命令成功后，新 IDA 进程应持有 MCP 端口，输入路径和数据库身份通过检查。
 
-## 切换到下一文件
+### 切换到下一文件
 
 ```powershell
 & $Python ida_sequential.py next "<NEXT_SAMPLE>" `
@@ -113,7 +115,7 @@ IDA 以 `-A -P+` 启动。`-B` 会进入自动分析后退出的批处理流程�
 
 多个文件串行处理，并保持一个 IDA GUI 实例和一个 MCP 监听。
 
-## 失败处理
+### 失败处理
 
 出现以下情况时终止本轮流程：
 

@@ -46,7 +46,7 @@ Test-Path -LiteralPath $Python -PathType Leaf
 依赖缺失时安装：
 
 ```powershell
-& $Python -m pip install pywinauto pywin32
+& $Python -m pip install pywinauto
 ```
 
 ## 基本参数

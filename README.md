@@ -13,6 +13,12 @@
 url = "<MCP_URL>"
 ```
 
+## 安装
+
+```text
+npx skills add 365daysdreamer/ida-sequential -g
+```
+
 ## 确认 Python 解释器
 
 脚本需要独立 Python 解释器。IDA 内嵌环境中的 `sys.executable` 常指向 `ida.exe`，解释器应以 `sys.base_prefix` 推导：

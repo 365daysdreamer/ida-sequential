@@ -13,10 +13,11 @@ from unittest.mock import Mock, patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
+SKILL_DIR = ROOT / "ida-sequential"
+if str(SKILL_DIR) not in sys.path:
+    sys.path.insert(0, str(SKILL_DIR))
 
-from ida-sequential import ida_sequential as target
+import ida_sequential as target
 
 
 class FakeDesktop:
@@ -37,6 +38,7 @@ class FakeRuntime:
         self.closed = False
         self.launched = False
         self.open_path = None
+        self.launch_executable = None
         self.events: list[str] = []
         self.clock_values = None
 
@@ -55,6 +57,7 @@ class FakeRuntime:
         self.launched = True
         self.owner = self.new_pid
         self.open_path = opened
+        self.launch_executable = executable
         return self.new_pid
 
     def prepare_desktop(self, pid: int):
@@ -135,8 +138,8 @@ class ComtypesCacheTests(unittest.TestCase):
             code = "\n".join(
                 (
                     "import sys",
-                    f"sys.path.insert(0, {str(ROOT)!r})",
-                    "from scripts.ida_sequential import configure_comtypes_cache, isolated_comtypes_cache",
+                    f"sys.path.insert(0, {str(SKILL_DIR)!r})",
+                    "from ida_sequential import configure_comtypes_cache, isolated_comtypes_cache",
                     "with isolated_comtypes_cache() as cache_root:",
                     "    configure_comtypes_cache(cache_root)",
                     "    import pywinauto",
@@ -581,6 +584,37 @@ class SwitchTests(unittest.TestCase):
         self.assertIn("launch", runtime.events)
         client.tool.assert_called_once_with("idb_save", timeout=10)
 
+    def test_next_without_ida_reuses_current_process_executable(self):
+        runtime = FakeRuntime(self.executable)
+        client = Mock(spec=target.McpClient)
+        client.health.side_effect = [self.current_health(), self.next_health()]
+        client.tool.return_value = {"ok": True, "path": str(self.current_database)}
+        sequencer = target.IdaSequencer(
+            self.endpoint, 10, client=client, runtime=runtime
+        )
+
+        session = sequencer.next(self.next_input, self.current_input)
+
+        self.assertEqual(session.pid, runtime.new_pid)
+        self.assertEqual(runtime.launch_executable, self.executable)
+        self.assertEqual(runtime.open_path, self.next_input)
+
+    def test_next_explicit_ida_mismatch_fails(self):
+        other_ida = self.root / "ida.exe"
+        other_ida.write_bytes(b"")
+        runtime = FakeRuntime(self.executable)
+        client = Mock(spec=target.McpClient)
+        client.health.return_value = self.current_health()
+        sequencer = target.IdaSequencer(
+            self.endpoint, 10, client=client, runtime=runtime
+        )
+
+        with self.assertRaisesRegex(target.SwitchError, "does not match"):
+            sequencer.next(self.next_input, self.current_input, other_ida)
+
+        client.tool.assert_not_called()
+        self.assertFalse(runtime.launched)
+
     def test_save_failure_keeps_current_session(self):
         runtime = FakeRuntime(self.executable)
         client = Mock(spec=target.McpClient)
@@ -650,6 +684,19 @@ class SwitchTests(unittest.TestCase):
 
 
 class CliFailureTests(unittest.TestCase):
+    def test_parser_allows_next_without_ida(self):
+        args = target.build_parser().parse_args(
+            ["next", "next.exe", "--expect-current", "current.exe"]
+        )
+        self.assertIsNone(args.ida)
+
+    def test_parser_requires_ida_for_open(self):
+        stderr = StringIO()
+        with redirect_stderr(stderr), self.assertRaises(SystemExit) as raised:
+            target.build_parser().parse_args(["open", "sample.exe"])
+        self.assertEqual(raised.exception.code, 2)
+        self.assertIn("--ida", stderr.getvalue())
+
     def test_switch_error_returns_nonzero(self):
         stderr = StringIO()
         with (

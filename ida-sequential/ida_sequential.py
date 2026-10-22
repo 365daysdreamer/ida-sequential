@@ -621,16 +621,23 @@ class IdaSequencer:
             raise SwitchError(f"Sample missing: {source}")
         return self._launch(executable, source, target_for(source))
 
-    def next(self, source: Path, expected: Path, executable: Path) -> IdaSession:
-        validate_ida_executable(executable)
+    def next(
+        self,
+        source: Path,
+        expected: Path,
+        executable: Path | None = None,
+    ) -> IdaSession:
         if not source.is_file():
             raise SwitchError(f"Next sample missing: {source}")
         current = self.session(expected)
-        if not same_path(current.executable, executable):
-            raise SwitchError(
-                f"--ida does not match the current process: {executable} != "
-                f"{current.executable}"
-            )
+        if executable is not None:
+            validate_ida_executable(executable)
+            if not same_path(current.executable, executable):
+                raise SwitchError(
+                    f"--ida does not match the current process: {executable} != "
+                    f"{current.executable}"
+                )
+        executable = current.executable
         opened = target_for(source)
         if any(
             same_path(opened, path) or same_path(source, path)
@@ -792,7 +799,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     following.add_argument("file", type=Path)
     following.add_argument("--expect-current", type=Path, required=True)
-    following.add_argument("--ida", type=Path, required=True)
+    following.add_argument("--ida", type=Path)
     following.add_argument("--mcp-url", default=DEFAULT_MCP_URL)
     following.add_argument("--timeout", type=positive_int, default=180)
     return parser
@@ -818,7 +825,7 @@ def cli(argv=None) -> int:
             result = sequencer.next(
                 args.file.resolve(),
                 args.expect_current.resolve(),
-                args.ida.resolve(),
+                args.ida.resolve() if args.ida else None,
             ).status(endpoint)
         print(json.dumps(result, ensure_ascii=False, indent=2), flush=True)
     except SwitchError as exc:

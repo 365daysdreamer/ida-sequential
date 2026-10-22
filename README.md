@@ -4,7 +4,7 @@
 
 ## 环境准备
 
-需要 Windows 交互式桌面、IDA Pro 8.3 GUI，以及已启用 GUI 模式的 `ida-pro-mcp`。脚本与 IDA 应处于相同桌面会话和权限级别。
+需要 Windows 交互式桌面、IDA Pro 8.3 GUI，以及已启用 GUI 模式的 [`ida-pro-mcp`](https://github.com/mrexodia/ida-pro-mcp)。脚本与 IDA 应处于相同桌面会话和权限级别。
 
 配置本机回环 MCP 地址：
 

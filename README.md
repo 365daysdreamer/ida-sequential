@@ -21,7 +21,7 @@ npx skills add 365daysdreamer/ida-sequential -g
 
 ### 确认 Python 解释器
 
-脚本需要使用和 `ida-pro-mcp` 相同的 Python 解释器。IDA 内嵌环境中的 `sys.executable` 常指向 `ida.exe`，解释器应以 `sys.base_prefix` 推导：
+脚本需要使用和 `ida-pro-mcp` 相同的 Python 解释器。若 `ida-pro-mcp` 已连接且提供 `py_eval`，用它在 IDA 进程内执行以下只读代码。
 
 ```python
 import sys
@@ -32,8 +32,6 @@ from pathlib import Path
     "python_version": sys.version,
 }
 ```
-
-若 `ida-pro-mcp` 已连接且提供 `py_eval`，用它执行上述只读代码。该工具会在 IDA 进程内执行代码，只适用于可信的本机回环端点。
 
 MCP 未连接、`py_eval` 不可用或推导路径不存在时，向用户索取 `<PYTHON_EXE>`。路径确认一次后用于后续命令：
 
@@ -51,58 +49,64 @@ Test-Path -LiteralPath $Python -PathType Leaf
 
 ## 使用方法
 
-### 基本参数
+### 变量
 
 ```powershell
-Set-Location "<REPO_ROOT>"
-$Ida = "<IDA_EXE>"
-$McpUrl = "<MCP_URL>"
-$Timeout = 600
+$Ida = "<PATH/TO/IDA_EXE>"
+$McpUrl = "<MCP_URL>" # default="http://127.0.0.1:13337/mcp"
+$Timeout = <seconds> # default=180
 ```
 
-`--ida` 指向 IDA GUI 可执行文件。`--timeout` 控制关闭与启动等待的上限，单位为秒。
+### 参数
 
-### 查看状态
+- `--expect-current` 核对当前样本或 IDB 身份。
+- `--ida` 指向 IDA GUI 可执行文件。
+- `--mcp-url` 指向可流式传输的 MCP 服务器地址。使用回环地址，CLI 会拒绝其他主机地址。
+- `--timeout` 控制关闭与启动等待的上限，单位为秒。
 
+### 命令
+
+`status`：显示当前的 IDA 和 MCP 状态。
+- 可选参数：
+  - `--mcp-url $McpUrl`
+
+`open`：当 MCP 端口空闲时，打开一个样本。
+- 必填参数：
+  - `"<PATH/TO/SAMPLE>"`
+  - `--ida $Ida`
+- 可选参数：
+  - `--mcp-url $McpUrl`
+  - `--timeout $Timeout`
+
+`next`：保存并关闭当前的 IDA，然后打开下一个样本。
+- 必填参数：
+  - `"<PATH/TO/NEXT_SAMPLE>"`
+  - `--expect-current "<PATH/TO/CURRENT_SAMPLE>"`
+- 可选参数：
+  - `--ida $Ida` 在下一个样本使用不同 IDA 的情况下使用
+  - `--mcp-url $McpUrl`
+  - `--timeout $Timeout`
+
+### 用法
+
+`status`:
 ```powershell
-& $Python ida_sequential.py status --mcp-url $McpUrl
+& $Python ida_sequential.py status
 ```
 
-输出包含 `pid`、`ida_path`、`mcp_url` 和 `server_health`。验收时检查：
-
-- `server_health.status` 为 `ok`
-- `input_path` 指向当前样本
-- `idb_path` 指向当前数据库
-- `auto_analysis_ready` 为 `true`
-
-### 首次打开
-
-MCP 端口空闲且没有 IDA 实例时：
-
+`open`:
 ```powershell
-& $Python ida_sequential.py open "<SAMPLE>" `
-  --ida $Ida `
-  --mcp-url $McpUrl `
-  --timeout $Timeout
+& $Python ida_sequential.py open "<PATH/TO/SAMPLE>" --ida $Ida
 ```
 
-命令成功后，新 IDA 进程应持有 MCP 端口，输入路径和数据库身份通过检查。
-
-### 切换到下一文件
-
+`next`:
 ```powershell
-& $Python ida_sequential.py next "<NEXT_SAMPLE>" `
-  --expect-current "<CURRENT_SAMPLE>" `
-  --ida $Ida `
-  --mcp-url $McpUrl `
-  --timeout $Timeout
+& $Python ida_sequential.py next "<PATH/TO/NEXT_SAMPLE>" --expect-current "<PATH/TO/CURRENT_SAMPLE>"
 ```
 
-`--expect-current` 核对当前样本或 IDB 身份。
+### 执行周期
 
-每轮顺序分析按以下流程执行：
-
-1. 完成当前文件分析，若有相关分析技能则自动调用，将结果写入独立报告。
+1. 完成当前文件分析，若有相关分析技能则自动调用。
 2. 运行 `status`，核对 PID、输入路径、IDB 和 `auto_analysis_ready`。
 3. 运行 `next`。脚本调用 `idb_save`，正常关闭 IDA，等待旧 PID 退出、端口释放且 IDB 非空。
 4. 脚本启动下一文件，核对新 PID、输入路径、IDB 和 `auto_analysis_ready`。
@@ -114,6 +118,15 @@ MCP 端口空闲且没有 IDA 实例时：
 IDA 以 `-A -P+` 启动。`-B` 会进入自动分析后退出的批处理流程，无法维持 GUI MCP 服务。
 
 多个文件串行处理，并保持一个 IDA GUI 实例和一个 MCP 监听。
+
+### 验证
+
+退出码为 `0`。执行 `status`，检查：
+
+- `server_health.status` 为 `ok`
+- `input_path` 指向当前样本
+- `idb_path` 指向当前数据库
+- `auto_analysis_ready` 为 `true`
 
 ### 失败处理
 

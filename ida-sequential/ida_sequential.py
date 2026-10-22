@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-"""通过现有 HTTP MCP 顺序切换 IDA Pro GUI 会话。"""
 from __future__ import annotations
 
 import argparse
@@ -38,7 +37,7 @@ IDA_WINDOW_CLASS = re.compile(r"^Qt\d+(?:[A-Za-z]+)?QWindowIcon$", re.IGNORECASE
 
 
 class SwitchError(RuntimeError):
-    """安全切换无法继续。"""
+    pass
 
 
 def configure_utf8() -> None:
@@ -632,12 +631,6 @@ class IdaSequencer:
         current = self.session(expected)
         if executable is not None:
             validate_ida_executable(executable)
-            if not same_path(current.executable, executable):
-                raise SwitchError(
-                    f"--ida does not match the current process: {executable} != "
-                    f"{current.executable}"
-                )
-        executable = current.executable
         opened = target_for(source)
         if any(
             same_path(opened, path) or same_path(source, path)
@@ -787,7 +780,7 @@ def build_parser() -> argparse.ArgumentParser:
     status.add_argument("--mcp-url", default=DEFAULT_MCP_URL)
 
     opening = commands.add_parser(
-        "open", help="open a first sample when the MCP port is free"
+        "open", help="open a sample when the MCP port is free"
     )
     opening.add_argument("file", type=Path)
     opening.add_argument("--ida", type=Path, required=True)

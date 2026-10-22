@@ -599,22 +599,6 @@ class SwitchTests(unittest.TestCase):
         self.assertEqual(runtime.launch_executable, self.executable)
         self.assertEqual(runtime.open_path, self.next_input)
 
-    def test_next_explicit_ida_mismatch_fails(self):
-        other_ida = self.root / "ida.exe"
-        other_ida.write_bytes(b"")
-        runtime = FakeRuntime(self.executable)
-        client = Mock(spec=target.McpClient)
-        client.health.return_value = self.current_health()
-        sequencer = target.IdaSequencer(
-            self.endpoint, 10, client=client, runtime=runtime
-        )
-
-        with self.assertRaisesRegex(target.SwitchError, "does not match"):
-            sequencer.next(self.next_input, self.current_input, other_ida)
-
-        client.tool.assert_not_called()
-        self.assertFalse(runtime.launched)
-
     def test_save_failure_keeps_current_session(self):
         runtime = FakeRuntime(self.executable)
         client = Mock(spec=target.McpClient)

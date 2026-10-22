@@ -63,7 +63,7 @@ $Timeout = 600
 ## 查看状态
 
 ```powershell
-& $Python scripts/ida_sequential.py status --mcp-url $McpUrl
+& $Python ida_sequential.py status --mcp-url $McpUrl
 ```
 
 输出包含 `pid`、`ida_path`、`mcp_url` 和 `server_health`。验收时检查：
@@ -78,7 +78,7 @@ $Timeout = 600
 MCP 端口空闲且没有 IDA 实例时：
 
 ```powershell
-& $Python scripts/ida_sequential.py open "<SAMPLE>" `
+& $Python ida_sequential.py open "<SAMPLE>" `
   --ida $Ida `
   --mcp-url $McpUrl `
   --timeout $Timeout
@@ -89,7 +89,7 @@ MCP 端口空闲且没有 IDA 实例时：
 ## 切换到下一文件
 
 ```powershell
-& $Python scripts/ida_sequential.py next "<NEXT_SAMPLE>" `
+& $Python ida_sequential.py next "<NEXT_SAMPLE>" `
   --expect-current "<CURRENT_SAMPLE>" `
   --ida $Ida `
   --mcp-url $McpUrl `

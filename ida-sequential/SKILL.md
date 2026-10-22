@@ -33,19 +33,19 @@ If MCP or `py_eval` is unavailable, or the derived file is missing or unusable, 
 Use a loopback `$McpUrl`; the CLI rejects other hosts.
 
 ```powershell
-& $Python scripts/ida_sequential.py status --mcp-url $McpUrl
+& $Python ida_sequential.py status --mcp-url $McpUrl
 ```
 
 Open the first file when the MCP port is free:
 
 ```powershell
-& $Python scripts/ida_sequential.py open "<SAMPLE>" --ida $Ida --mcp-url $McpUrl --timeout 600
+& $Python ida_sequential.py open "<SAMPLE>" --ida $Ida --mcp-url $McpUrl --timeout 600
 ```
 
 Analyze one file using relevant skills if exist, and save the report. Then switch and verify the next session:
 
 ```powershell
-& $Python scripts/ida_sequential.py next "<NEXT_SAMPLE>" --expect-current "<CURRENT_SAMPLE>" --ida $Ida --mcp-url $McpUrl --timeout 600
+& $Python ida_sequential.py next "<NEXT_SAMPLE>" --expect-current "<CURRENT_SAMPLE>" --ida $Ida --mcp-url $McpUrl --timeout 600
 ```
 
 The switch saves the current IDB, closes the GUI normally, waits for the old PID and port to clear, launches the next file, and checks its PID and identity.
